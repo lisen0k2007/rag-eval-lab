@@ -1,8 +1,8 @@
 import streamlit as st
 import requests
 
-# Адрес твоего API
-API_URL = "http://127.0.0.1:8000"
+import os
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="RAG Ассистент", page_icon="📚")
 st.title("📚 Умный поиск по документу")

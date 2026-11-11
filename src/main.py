@@ -21,7 +21,6 @@ def health():
 
 @app.post("/load_document")
 def load_document():
-    """Загружает PDF из data/document.pdf и режет на чанки."""
     global _chunks
     pdf_path = "data/document.pdf"
     if not os.path.exists(pdf_path):
@@ -37,8 +36,18 @@ def load_document():
 def ask(req: QuestionRequest):
     if not _chunks:
         raise HTTPException(status_code=400, detail="Сначала вызови /load_document")
-    sources = retrieve(req.question, _chunks, k=3)
-    context = "\n\n---\n\n".join(sources)
+    
+    # Получаем контекст
+    context = retrieve(req.question, _chunks, k=3)
+    
+    # Собираем промпт
     prompt = build_prompt(req.question, context)
-    answer = ask_yandexgpt(prompt)
-    return AnswerResponse(answer=answer, sources=sources)
+    
+    try:
+        # Стучимся в YandexGPT
+        answer = ask_yandexgpt(prompt)
+    except Exception as e:
+        # Если Яндекс вернул ошибку, мы покажем её в браузере
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    return AnswerResponse(answer=answer, sources=[context])

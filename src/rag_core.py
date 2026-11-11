@@ -1,19 +1,59 @@
 import os
+import re
 import requests
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 load_dotenv()
 
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 
+# Загружаем модель для векторизации (она скачается один раз при первом запуске)
+# Используем ту же модель, что и в experiments.py, чтобы результаты совпадали
+print("Загрузка модели эмбеддингов (подождите при первом запуске)...")
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+def clean_text(text):
+    """Убирает лишние пробелы и переносы строк"""
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
 def chunk_text(text, chunk_size=500, overlap=50):
-    chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size-overlap)]
+    """Режет текст на куски"""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start = end - overlap
     return chunks
 
 def retrieve(question, chunks, k=3):
-    # Простая заглушка: берем первые k кусков и склеиваем в одну строку
-    selected_chunks = chunks[:k]
+    """
+    Умный поиск: векторизует вопрос и чанки, 
+    находит самые похожие по смыслу куски текста.
+    """
+    if not chunks:
+        return ""
+    
+    # Переводим вопрос в вектор
+    q_emb = embedder.encode([question])
+    
+    # Переводим все чанки в векторы
+    # (В реальном проекте они должны кэшироваться, но для нашего теста сойдет)
+    chunks_emb = embedder.encode(chunks)
+    
+    # Считаем косинусное сходство (от 0 до 1)
+    similarities = cosine_similarity(q_emb, chunks_emb)[0]
+    
+    # Берем индексы топ-k самых похожих чанков
+    top_k_indices = similarities.argsort()[-k:][::-1]
+    
+    # Собираем найденные чанки
+    selected_chunks = [chunks[i] for i in top_k_indices]
+    
     return "\n\n".join(selected_chunks)
 
 def build_prompt(question, context):
@@ -40,18 +80,7 @@ def ask_yandexgpt(prompt):
     }
     response = requests.post(url, headers=headers, json=payload, timeout=30)
     
-    # Выводим ответ Яндекса в терминал для отладки
-    print("\n--- ОТВЕТ ОТ ЯНДЕКСА ---")
-    print("Статус:", response.status_code)
-    print("Текст:", response.text)
-    print("-------------------------\n")
-    
-    # Если Яндекс вернул ошибку (не 200), выбрасываем исключение
     if response.status_code != 200:
         raise ValueError(f"Ошибка Yandex API: {response.text}")
 
-    # Извлекаем ответ
-    try:
-        return response.json()["result"]["alternatives"][0]["message"]["text"]
-    except KeyError:
-        raise ValueError(f"Странный ответ от Яндекса: {response.text}")
+    return response.json()["result"]["alternatives"][0]["message"]["text"]

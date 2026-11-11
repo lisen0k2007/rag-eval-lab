@@ -10,8 +10,7 @@ load_dotenv()
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 
-# Загружаем модель для векторизации (она скачается один раз при первом запуске)
-# Используем ту же модель, что и в experiments.py, чтобы результаты совпадали
+# Загружаем модель для векторизации
 print("Загрузка модели эмбеддингов (подождите при первом запуске)...")
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -20,8 +19,8 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-def chunk_text(text, chunk_size=500, overlap=50):
-    """Режет текст на куски"""
+def chunk_text(text, chunk_size=1000, overlap=200):
+    """Режет текст на куски (параметры 1000/200 дали лучший Hit Rate)"""
     chunks = []
     start = 0
     while start < len(text):
@@ -42,7 +41,6 @@ def retrieve(question, chunks, k=3):
     q_emb = embedder.encode([question])
     
     # Переводим все чанки в векторы
-    # (В реальном проекте они должны кэшироваться, но для нашего теста сойдет)
     chunks_emb = embedder.encode(chunks)
     
     # Считаем косинусное сходство (от 0 до 1)

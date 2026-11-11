@@ -1,7 +1,28 @@
-.vs/
+# Виртуальное окружение Python
 venv/
+.venv/
+env/
+
+# Кэш Python
 __pycache__/
-*.pyc
-.env
-chroma_db/
+*.py[cod]
+*$py.class
+
+# Данные и модели (они слишком тяжелые для GitHub)
 data/*.pdf
+data/*.json
+!data/eval_questions.json
+
+# Настройки среды (секретные ключи)
+.env
+
+# Системный мусор (Mac/Windows)
+.DS_Store
+Thumbs.db
+
+# Настройки IDE
+.vscode/
+.idea/
+
+# Docker (если решишь не пушить в репозиторий)
+# docker-compose.override.yml

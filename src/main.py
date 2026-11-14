@@ -1,53 +1,47 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File # <-- Добавь UploadFile, File
 from pydantic import BaseModel
-from src.rag_core import chunk_text, retrieve, build_prompt, ask_yandexgpt
+from src.rag_core import chunk_text, build_prompt, ask_yandexgpt, embedder, client # <-- Убедись, что импортируешь модель и клиент Chroma из rag_core (мы их туда переносили на Этапе 4)
+import io
 from pypdf import PdfReader
-import os
 
-app = FastAPI(title="RAG-Eval-Lab API")
+app = FastAPI(...)
 
-_chunks = []
+# ... твои старые модели Pydantic ...
 
-class QuestionRequest(BaseModel):
-    question: str
+# Твой старый эндпоинт /load_document можно оставить, он не помешает.
 
-class AnswerResponse(BaseModel):
-    answer: str
-    sources: list[str]
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "chunks_loaded": len(_chunks)}
-
-@app.post("/load_document")
-def load_document():
-    global _chunks
-    pdf_path = "data/document.pdf"
-    if not os.path.exists(pdf_path):
-        raise HTTPException(status_code=404, detail="data/document.pdf не найден")
-    reader = PdfReader(pdf_path)
+# --- НОВЫЙ ЭНДПОИНТ ДЛЯ ЗАГРУЗКИ ФАЙЛА ---
+@app.post("/upload")
+async def upload_document(file: UploadFile = File(...)):
+    global collection
+    
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Пожалуйста, загрузите файл в формате PDF")
+        
+    # Читаем файл прямо в память, не сохраняя на диск
+    pdf_bytes = await file.read()
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    
     full_text = ""
     for page in reader.pages:
         full_text += (page.extract_text() or "") + "\n"
-    _chunks = chunk_text(full_text)
-    return {"chunks": len(_chunks)}
-
-@app.post("/ask", response_model=AnswerResponse)
-def ask(req: QuestionRequest):
-    if not _chunks:
-        raise HTTPException(status_code=400, detail="Сначала вызови /load_document")
-    
-    # Получаем контекст
-    context = retrieve(req.question, _chunks, k=3)
-    
-    # Собираем промпт
-    prompt = build_prompt(req.question, context)
-    
-    try:
-        # Стучимся в YandexGPT
-        answer = ask_yandexgpt(prompt)
-    except Exception as e:
-        # Если Яндекс вернул ошибку, мы покажем её в браузере
-        raise HTTPException(status_code=500, detail=str(e))
         
-    return AnswerResponse(answer=answer, sources=[context])
+    # Нарезаем на чанки (используем твои лучшие параметры 1000/200)
+    chunks = chunk_text(full_text, chunk_size=1000, overlap=200)
+    
+    # Очищаем старую базу и загружаем новые чанки
+    try:
+        client.delete_collection("docs")
+    except:
+        pass
+    collection = client.create_collection("docs")
+    
+    # Векторизуем и добавляем
+    embeddings = embedder.encode(chunks).tolist()
+    collection.add(
+        documents=chunks,
+        embeddings=embeddings,
+        ids=[str(i) for i in range(len(chunks))]
+    )
+    
+    return {"message": "Файл успешно загружен", "chunks_count": len(chunks)}

@@ -7,7 +7,7 @@ import os
 
 app = FastAPI(title="RAG-Eval-Lab API", description="Умный поиск по PDF")
 
-# Глобальная переменная для хранения коллекции ChromaDB
+# Глобальная переменная для хранения коллекции
 collection = None
 
 class QuestionRequest(BaseModel):
@@ -22,22 +22,10 @@ def health():
     status = "ok" if collection is not None else "no_document_loaded"
     return {"status": "ok", "database_status": status}
 
-@app.post("/load_document")
-def load_document():
-    """Загружает дефолтный PDF из папки data (для обратной совместимости)."""
+def process_and_store(text):
+    """Вспомогательная функция для нарезки и сохранения в базу."""
     global collection
-    pdf_path = "data/document.pdf"
-    
-    if not os.path.exists(pdf_path):
-        raise HTTPException(status_code=404, detail="Файл data/document.pdf не найден")
-        
-    reader = PdfReader(pdf_path)
-    full_text = ""
-    for page in reader.pages:
-        full_text += (page.extract_text() or "") + "\n"
-        
-    # Используем лучшие параметры из экспериментов
-    chunks = chunk_text(full_text, chunk_size=1000, overlap=200)
+    chunks = chunk_text(text, chunk_size=1000, overlap=200)
     
     try:
         client.delete_collection("docs")
@@ -51,53 +39,43 @@ def load_document():
         embeddings=embeddings,
         ids=[str(i) for i in range(len(chunks))]
     )
+    return len(chunks)
+
+@app.post("/load_document")
+def load_document():
+    """Загружает дефолтный PDF из папки data."""
+    pdf_path = "data/document.pdf"
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail="Файл data/document.pdf не найден")
+        
+    reader = PdfReader(pdf_path)
+    full_text = "".join([(page.extract_text() or "") + "\n" for page in reader.pages])
     
-    return {"message": "Документ загружен", "chunks_count": len(chunks)}
+    count = process_and_store(full_text)
+    return {"message": "Документ загружен", "chunks_count": count}
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     """Принимает PDF файл напрямую через интерфейс."""
-    global collection
-    
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Пожалуйста, загрузите файл в формате PDF")
         
     pdf_bytes = await file.read()
     reader = PdfReader(io.BytesIO(pdf_bytes))
     
-    full_text = ""
-    for page in reader.pages:
-        full_text += (page.extract_text() or "") + "\n"
-        
-    chunks = chunk_text(full_text, chunk_size=1000, overlap=200)
+    full_text = "".join([(page.extract_text() or "") + "\n" for page in reader.pages])
     
-    try:
-        client.delete_collection("docs")
-    except:
-        pass
-    collection = client.create_collection("docs")
-    
-    embeddings = embedder.encode(chunks).tolist()
-    collection.add(
-        documents=chunks,
-        embeddings=embeddings,
-        ids=[str(i) for i in range(len(chunks))]
-    )
-    
-    return {"message": "Файл успешно загружен", "chunks_count": len(chunks)}
+    count = process_and_store(full_text)
+    return {"message": "Файл успешно загружен", "chunks_count": count}
 
 @app.post("/ask", response_model=AnswerResponse)
 def ask(req: QuestionRequest):
-    """Принимает вопрос, ищет контекст в ChromaDB и спрашивает YandexGPT."""
+    """Ищет контекст в ChromaDB и спрашивает YandexGPT."""
     global collection
-    
     if collection is None:
-        raise HTTPException(status_code=400, detail="Сначала загрузите документ через /upload или /load_document")
+        raise HTTPException(status_code=400, detail="Сначала загрузите документ")
         
-    # Векторизуем вопрос
     q_emb = embedder.encode([req.question]).tolist()
-    
-    # Ищем топ-3 чанка
     results = collection.query(query_embeddings=q_emb, n_results=3)
     sources = results["documents"][0]
     
@@ -106,7 +84,6 @@ def ask(req: QuestionRequest):
         
     context = "\n\n---\n\n".join(sources)
     prompt = build_prompt(req.question, context)
-    
     answer = ask_yandexgpt(prompt)
     
     return AnswerResponse(answer=answer, sources=sources)

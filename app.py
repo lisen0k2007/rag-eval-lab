@@ -1,31 +1,53 @@
 import streamlit as st
 import requests
-
 import os
+
+# Берем адрес API из переменных окружения (для Docker), иначе используем localhost
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(page_title="RAG Ассистент", page_icon="📚")
 st.title("📚 Умный поиск по документу")
-st.markdown("Задайте вопрос по методичке, и я найду ответ в тексте.")
+st.markdown("Загрузите любой PDF-файл и задайте по нему вопрос.")
 
-# Инициализация истории чата в сессии
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Боковая панель с кнопкой загрузки документа
 with st.sidebar:
-    st.header("Управление")
-    if st.button("Загрузить документ (PDF)"):
-        with st.spinner("Читаю и режу на куски..."):
+    st.header("Управление документом")
+    
+    # Виджет загрузки файла
+    uploaded_file = st.file_uploader("Выберите PDF файл", type="pdf")
+    
+    if uploaded_file is not None:
+        if st.button("Обработать файл"):
+            with st.spinner("Читаю и обрабатываю документ..."):
+                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
+                try:
+                    response = requests.post(f"{API_URL}/upload", files=files)
+                    if response.status_code == 200:
+                        data = response.json()
+                        st.success(f"Успех! Загружено {data['chunks_count']} фрагментов.")
+                        # Очищаем историю чата при загрузке нового документа
+                        st.session_state.messages = []
+                    else:
+                        st.error(f"Ошибка: {response.text}")
+                except Exception as e:
+                    st.error(f"Не могу подключиться к API. ({e})")
+                    
+    st.divider()
+    st.markdown("Или загрузите тестовый документ из папки `data`:")
+    if st.button("Загрузить data/document.pdf"):
+        with st.spinner("Загружаю тестовый документ..."):
             try:
                 response = requests.post(f"{API_URL}/load_document")
                 if response.status_code == 200:
                     data = response.json()
-                    st.success(f"Успех! Загружено {data.get('chunks', 0)} кусков текста.")
+                    st.success(f"Успех! Загружено {data['chunks_count']} фрагментов.")
+                    st.session_state.messages = []
                 else:
                     st.error(f"Ошибка: {response.text}")
             except Exception as e:
-                st.error(f"Не могу подключиться к API. Запущен ли сервер? ({e})")
+                st.error(f"Ошибка соединения: {e}")
 
 # Отображение истории сообщений
 for message in st.session_state.messages:
@@ -33,15 +55,13 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # Поле ввода вопроса
-if prompt := st.chat_input("Ваш вопрос (например: О чём этот документ?)"):
-    # Добавляем вопрос пользователя в историю
+if prompt := st.chat_input("Ваш вопрос по документу..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Отправляем запрос к FastAPI
     with st.chat_message("assistant"):
-        with st.spinner("Ищу ответ в документе..."):
+        with st.spinner("Ищу ответ..."):
             try:
                 response = requests.post(
                     f"{API_URL}/ask", 
@@ -54,14 +74,14 @@ if prompt := st.chat_input("Ваш вопрос (например: О чём э�
                     
                     st.markdown(answer)
                     
-                    # Показываем источники (откуда взялся ответ)
                     if sources:
                         with st.expander("Посмотреть источники (контекст)"):
                             for i, source in enumerate(sources):
                                 st.info(f"Фрагмент {i+1}:\n{source}")
                     
-                    # Сохраняем ответ в историю
                     st.session_state.messages.append({"role": "assistant", "content": answer})
+                elif response.status_code == 400:
+                    st.warning("Сначала загрузите документ в боковой панели!")
                 else:
                     st.error(f"Ошибка API: {response.text}")
             except Exception as e:

@@ -1,26 +1,33 @@
 import os
 import re
 import requests
+import chromadb
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 
+# Загружаем ключи из .env
 load_dotenv()
 
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 
-# Загружаем модель для векторизации
-print("Загрузка модели эмбеддингов (подождите при первом запуске)...")
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+# 1. Инициализируем клиент базы данных (наша переменная client)
+client = chromadb.Client()
+
+# 2. Инициализируем модель эмбеддингов
+# Если ты качала модель вручную в папку local_model, он возьмет ее оттуда
+model_path = "./local_model" if os.path.exists("./local_model") else "all-MiniLM-L6-v2"
+embedder = SentenceTransformer(model_path)
 
 def clean_text(text):
-    """Убирает лишние пробелы и переносы строк"""
+    """Убирает мусорные символы, которые иногда выдает PDF."""
+    text = re.sub(r'[^\w\s\.\,\;\:\?\!\-\–\—\(\)\[\]\{\}\"\'\%\=\+\*\/\\]', ' ', text)
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 def chunk_text(text, chunk_size=1000, overlap=200):
-    """Режет текст на куски (параметры 1000/200 дали лучший Hit Rate)"""
+    """Режет текст на куски."""
+    text = clean_text(text)
     chunks = []
     start = 0
     while start < len(text):
@@ -29,34 +36,10 @@ def chunk_text(text, chunk_size=1000, overlap=200):
         start = end - overlap
     return chunks
 
-def retrieve(question, chunks, k=3):
-    """
-    Умный поиск: векторизует вопрос и чанки, 
-    находит самые похожие по смыслу куски текста.
-    """
-    if not chunks:
-        return ""
-    
-    # Переводим вопрос в вектор
-    q_emb = embedder.encode([question])
-    
-    # Переводим все чанки в векторы
-    chunks_emb = embedder.encode(chunks)
-    
-    # Считаем косинусное сходство (от 0 до 1)
-    similarities = cosine_similarity(q_emb, chunks_emb)[0]
-    
-    # Берем индексы топ-k самых похожих чанков
-    top_k_indices = similarities.argsort()[-k:][::-1]
-    
-    # Собираем найденные чанки
-    selected_chunks = [chunks[i] for i in top_k_indices]
-    
-    return "\n\n".join(selected_chunks)
-
 def build_prompt(question, context):
+    """Собирает промпт для нейросети."""
     return f"""Ответь на вопрос, используя ТОЛЬКО контекст ниже.
-Если ответа нет — скажи "В документе нет ответа".
+Если в контексте нет ответа — скажи "В документе нет ответа на этот вопрос".
 
 Контекст:
 {context}
@@ -65,6 +48,7 @@ def build_prompt(question, context):
 Ответ:"""
 
 def ask_yandexgpt(prompt):
+    """Отправляет запрос к YandexGPT."""
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
     headers = {
         "Authorization": f"Api-Key {YANDEX_API_KEY}",
@@ -76,9 +60,8 @@ def ask_yandexgpt(prompt):
         "completionOptions": {"temperature": 0, "maxTokens": 1000},
         "messages": [{"role": "user", "text": prompt}]
     }
-    response = requests.post(url, headers=headers, json=payload, timeout=30)
     
-    if response.status_code != 200:
-        raise ValueError(f"Ошибка Yandex API: {response.text}")
-
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+    
     return response.json()["result"]["alternatives"][0]["message"]["text"]
